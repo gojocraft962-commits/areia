@@ -63,7 +63,7 @@ public final class SandEspClient implements ClientModInitializer {
             }
         });
 
-        WorldRenderEvents.BEFORE_DEBUG_RENDER.register(context -> {
+        WorldRenderEvents.AFTER_ENTITIES.register(context -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (!enabled || client.world == null || client.player == null
                     || SAND_BLOCKS.isEmpty()
