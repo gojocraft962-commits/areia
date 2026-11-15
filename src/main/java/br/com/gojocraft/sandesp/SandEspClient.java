@@ -15,16 +15,14 @@ import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexRendering;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
-import net.minecraft.world.chunk.WorldChunk;
 import org.lwjgl.glfw.GLFW;
 
 /**
  * Client-side sand ESP for Minecraft 1.21.11 / Fabric.
  * Press K to toggle the outline.
- * Scans all loaded chunks (no distance limit).
+ * Scans within the client's render distance (effectively no practical limit).
  */
 public final class SandEspClient implements ClientModInitializer {
     private static final int REFRESH_INTERVAL_TICKS = 20;
@@ -102,26 +100,30 @@ public final class SandEspClient implements ClientModInitializer {
     private static void refreshSandCache(MinecraftClient client) {
         SAND_BLOCKS.clear();
 
-        // Escaneia TODOS os chunks carregados (sem limite de distância)
-        for (WorldChunk chunk : client.world.getChunkManager().chunks.values()) {
-            if (chunk == null) continue;
+        // Usa a distância de renderização do cliente (sem limite prático fixo)
+        int renderDistanceChunks = client.options.getViewDistance().getValue();
+        int radius = renderDistanceChunks * 16;
 
-            ChunkPos chunkPos = chunk.getPos();
-            int startX = chunkPos.getStartX();
-            int startZ = chunkPos.getStartZ();
-            int bottomY = client.world.getBottomY();
-            int topY = client.world.getTopYInclusive();
+        BlockPos center = client.player.getBlockPos();
+        BlockPos.Mutable cursor = new BlockPos.Mutable();
 
-            BlockPos.Mutable cursor = new BlockPos.Mutable();
+        int minY = client.world.getBottomY();
+        int maxY = client.world.getTopYInclusive();
 
-            for (int x = 0; x < 16; x++) {
-                for (int z = 0; z < 16; z++) {
-                    for (int y = bottomY; y <= topY; y++) {
-                        cursor.set(startX + x, y, startZ + z);
-                        var state = chunk.getBlockState(cursor);
-                        if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
-                            SAND_BLOCKS.add(cursor.toImmutable());
-                        }
+        for (int x = -radius; x <= radius; x++) {
+            for (int z = -radius; z <= radius; z++) {
+                // Só escaneia se o chunk estiver carregado
+                int chunkX = (center.getX() + x) >> 4;
+                int chunkZ = (center.getZ() + z) >> 4;
+                if (!client.world.getChunkManager().isChunkLoaded(chunkX, chunkZ)) {
+                    continue;
+                }
+
+                for (int y = minY; y <= maxY; y++) {
+                    cursor.set(center.getX() + x, y, center.getZ() + z);
+                    var state = client.world.getBlockState(cursor);
+                    if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
+                        SAND_BLOCKS.add(cursor.toImmutable());
                     }
                 }
             }
