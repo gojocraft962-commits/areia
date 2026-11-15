@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "sand_rgb_esp",
+  "id": "areia_esp",
   "version": "${version}",
-  "name": "Sand RGB ESP",
-  "description": "Client-side RGB outline ESP for sand and red sand blocks.",
+  "name": "Areia ESP",
+  "description": "ESP RGB de areia e areia vermelha (client-side).",
   "environment": "client",
   "entrypoints": {
     "client": ["br.com.gojocraft.sandesp.SandEspClient"]
