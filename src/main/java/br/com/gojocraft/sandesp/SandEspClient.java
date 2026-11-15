@@ -17,17 +17,15 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.shape.VoxelShapes;
 import org.lwjgl.glfw.GLFW;
 
 /**
  * Client-side sand ESP for Minecraft 1.21.11 / Fabric.
- * Press K to toggle the outline.
+ * Press K to toggle.
  */
 public final class SandEspClient implements ClientModInitializer {
-    // Raio grande (48 blocos = 96 de diâmetro). Sem limite prático no dia a dia.
-    private static final int SEARCH_RADIUS = 48;
-    private static final int REFRESH_INTERVAL_TICKS = 15;
+    private static final int SEARCH_RADIUS = 32;
+    private static final int REFRESH_INTERVAL_TICKS = 10;
     private static final List<BlockPos> SAND_BLOCKS = new ArrayList<>();
 
     private static boolean enabled = true;
@@ -46,16 +44,18 @@ public final class SandEspClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
-                if (client.player != null) {
-                    client.player.sendMessage(
-                            Text.literal(enabled ? "Areia ESP: ON" : "Areia ESP: OFF"),
-                            true
-                    );
-                }
+
                 if (!enabled) {
                     SAND_BLOCKS.clear();
-                } else {
-                    tickCounter = REFRESH_INTERVAL_TICKS; // força scan imediato
+                    if (client.player != null) {
+                        client.player.sendMessage(Text.literal("Areia ESP: OFF"), true);
+                    }
+                } else if (client.world != null && client.player != null) {
+                    refreshSandCache(client);
+                    client.player.sendMessage(
+                            Text.literal("Areia ESP: ON (" + SAND_BLOCKS.size() + " blocos)"),
+                            true
+                    );
                 }
             }
 
@@ -69,35 +69,41 @@ public final class SandEspClient implements ClientModInitializer {
             }
         });
 
-        WorldRenderEvents.AFTER_ENTITIES.register(context -> {
+        // BEFORE_DEBUG_RENDER e o evento certo para linhas/overlays
+        WorldRenderEvents.BEFORE_DEBUG_RENDER.register(context -> {
             if (!enabled || SAND_BLOCKS.isEmpty()) {
+                return;
+            }
+            if (context.matrices() == null || context.consumers() == null) {
                 return;
             }
 
             MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null || client.player == null
-                    || context.matrices() == null || context.consumers() == null) {
+            if (client.world == null || client.player == null) {
                 return;
             }
 
-            Vec3d cameraPos = client.gameRenderer.getCamera().getCameraPos();
-            int color = animatedRgbColor();
+            Vec3d cam = client.gameRenderer.getCamera().getCameraPos();
+            float[] rgb = animatedRgb();
             VertexConsumer lines = context.consumers().getBuffer(RenderLayers.lines());
 
             context.matrices().push();
             try {
                 for (BlockPos pos : SAND_BLOCKS) {
-                    double x = pos.getX() - cameraPos.x;
-                    double y = pos.getY() - cameraPos.y;
-                    double z = pos.getZ() - cameraPos.z;
+                    double x1 = pos.getX() - cam.x;
+                    double y1 = pos.getY() - cam.y;
+                    double z1 = pos.getZ() - cam.z;
+                    double x2 = x1 + 1.0;
+                    double y2 = y1 + 1.0;
+                    double z2 = z1 + 1.0;
 
-                    VertexRendering.drawOutline(
+                    // Caixa de outline em volta do bloco
+                    VertexRendering.drawBox(
                             context.matrices(),
                             lines,
-                            VoxelShapes.fullCube(),
-                            x, y, z,
-                            color,
-                            3.0f
+                            x1, y1, z1,
+                            x2, y2, z2,
+                            rgb[0], rgb[1], rgb[2], 1.0f
                     );
                 }
             } finally {
@@ -135,7 +141,7 @@ public final class SandEspClient implements ClientModInitializer {
         }
     }
 
-    private static int animatedRgbColor() {
+    private static float[] animatedRgb() {
         float hue = (System.currentTimeMillis() % 4000L) / 4000.0f;
         float scaled = hue * 6.0f;
         int sector = (int) scaled;
@@ -143,22 +149,13 @@ public final class SandEspClient implements ClientModInitializer {
         float q = 1.0f - fraction;
         float t = fraction;
 
-        float red;
-        float green;
-        float blue;
-        switch (sector % 6) {
-            case 0 -> { red = 1.0f; green = t; blue = 0.0f; }
-            case 1 -> { red = q; green = 1.0f; blue = 0.0f; }
-            case 2 -> { red = 0.0f; green = 1.0f; blue = t; }
-            case 3 -> { red = 0.0f; green = q; blue = 1.0f; }
-            case 4 -> { red = t; green = 0.0f; blue = 1.0f; }
-            default -> { red = 1.0f; green = 0.0f; blue = q; }
-        }
-
-        int r = Math.round(red * 255.0f);
-        int g = Math.round(green * 255.0f);
-        int b = Math.round(blue * 255.0f);
-        // ARGB com alpha alto
-        return 0xFF000000 | (r << 16) | (g << 8) | b;
+        return switch (sector % 6) {
+            case 0 -> new float[]{1.0f, t, 0.0f};
+            case 1 -> new float[]{q, 1.0f, 0.0f};
+            case 2 -> new float[]{0.0f, 1.0f, t};
+            case 3 -> new float[]{0.0f, q, 1.0f};
+            case 4 -> new float[]{t, 0.0f, 1.0f};
+            default -> new float[]{1.0f, 0.0f, q};
+        };
     }
 }
