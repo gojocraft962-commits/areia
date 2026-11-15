@@ -29,8 +29,8 @@ import org.lwjgl.glfw.GLFW;
 
 /**
  * Client-side sand ESP for Minecraft 1.21.11 / Fabric.
- * Outline + setas RGB apontando para a areia.
- * Press K to toggle.
+ * Detecta areia, areia vermelha, suspicious sand e suspicious gravel.
+ * Outline + setas. Press K to toggle.
  */
 public final class SandEspClient implements ClientModInitializer {
     private static final int CHUNK_RADIUS = 3;
@@ -40,7 +40,11 @@ public final class SandEspClient implements ClientModInitializer {
     private static final int MOVE_THRESHOLD = 8;
     private static final float ARROW_SIZE = 0.45f;
 
+    // Cor dourada fixa para Suspicious Sand / Gravel
+    private static final int SUSPICIOUS_COLOR = 0xFFFFD700;
+
     private static final List<BlockPos> SAND_BLOCKS = new ArrayList<>(256);
+    private static final List<BlockPos> SUSPICIOUS_BLOCKS = new ArrayList<>(64);
 
     private static boolean enabled = true;
     private static int tickCounter = 0;
@@ -62,6 +66,7 @@ public final class SandEspClient implements ClientModInitializer {
 
                 if (!enabled) {
                     SAND_BLOCKS.clear();
+                    SUSPICIOUS_BLOCKS.clear();
                     lastScanCenter = null;
                     if (client.player != null) {
                         client.player.sendMessage(Text.literal("Areia ESP: OFF"), true);
@@ -70,7 +75,8 @@ public final class SandEspClient implements ClientModInitializer {
                     lastScanCenter = null;
                     refreshSandCache(client);
                     client.player.sendMessage(
-                            Text.literal("Areia ESP: ON (" + SAND_BLOCKS.size() + " blocos)"),
+                            Text.literal("Areia ESP: ON (areia " + SAND_BLOCKS.size()
+                                    + " | suspicious " + SUSPICIOUS_BLOCKS.size() + ")"),
                             true
                     );
                 }
@@ -91,7 +97,10 @@ public final class SandEspClient implements ClientModInitializer {
         });
 
         WorldRenderEvents.AFTER_ENTITIES.register(context -> {
-            if (!enabled || SAND_BLOCKS.isEmpty()) {
+            if (!enabled) {
+                return;
+            }
+            if (SAND_BLOCKS.isEmpty() && SUSPICIOUS_BLOCKS.isEmpty()) {
                 return;
             }
             if (context.matrices() == null || context.consumers() == null) {
@@ -104,63 +113,73 @@ public final class SandEspClient implements ClientModInitializer {
             }
 
             Vec3d cam = client.gameRenderer.getCamera().getCameraPos();
-            int color = animatedRgbColor();
+            int rgbColor = animatedRgbColor();
             VertexConsumer lines = context.consumers().getBuffer(RenderLayers.lines());
             MatrixStack matrices = context.matrices();
 
-            // Ordena por distancia para priorizar as setas mais perto
-            List<BlockPos> sorted = new ArrayList<>(SAND_BLOCKS);
-            sorted.sort(Comparator.comparingDouble(pos ->
-                    pos.getSquaredDistance(cam.x, cam.y, cam.z)));
-
-            int outlines = 0;
-            int arrows = 0;
-
             matrices.push();
             try {
-                for (BlockPos pos : sorted) {
-                    double bx = pos.getX() - cam.x;
-                    double by = pos.getY() - cam.y;
-                    double bz = pos.getZ() - cam.z;
-
-                    // Outline do bloco
-                    if (outlines < MAX_OUTLINES) {
-                        VertexRendering.drawOutline(
-                                matrices,
-                                lines,
-                                VoxelShapes.fullCube(),
-                                bx, by, bz,
-                                color,
-                                2.0f
-                        );
-                        outlines++;
-                    }
-
-                    // Seta (linha + ponta) apontando para a areia
-                    if (arrows < MAX_ARROWS) {
-                        double tx = bx + 0.5;
-                        double ty = by + 0.5;
-                        double tz = bz + 0.5;
-
-                        // Linha da camera ate o centro do bloco
-                        drawLine(matrices, lines, 0, 0, 0, tx, ty, tz, color);
-
-                        // Ponta da seta no bloco
-                        drawArrowHead(matrices, lines, tx, ty, tz, color);
-                        arrows++;
-                    }
-
-                    if (outlines >= MAX_OUTLINES && arrows >= MAX_ARROWS) {
-                        break;
-                    }
-                }
+                // Suspicious primeiro (prioridade nas setas)
+                renderTargets(matrices, lines, cam, SUSPICIOUS_BLOCKS, SUSPICIOUS_COLOR, true);
+                renderTargets(matrices, lines, cam, SAND_BLOCKS, rgbColor, false);
             } finally {
                 matrices.pop();
             }
         });
     }
 
-    /** Linha entre dois pontos (coordenadas relativas a camera). */
+    private static void renderTargets(
+            MatrixStack matrices,
+            VertexConsumer lines,
+            Vec3d cam,
+            List<BlockPos> blocks,
+            int color,
+            boolean prioritizeArrows
+    ) {
+        if (blocks.isEmpty()) {
+            return;
+        }
+
+        List<BlockPos> sorted = new ArrayList<>(blocks);
+        sorted.sort(Comparator.comparingDouble(pos ->
+                pos.getSquaredDistance(cam.x, cam.y, cam.z)));
+
+        int outlines = 0;
+        int arrows = 0;
+        int maxArrows = prioritizeArrows ? MAX_ARROWS : Math.max(10, MAX_ARROWS / 2);
+
+        for (BlockPos pos : sorted) {
+            double bx = pos.getX() - cam.x;
+            double by = pos.getY() - cam.y;
+            double bz = pos.getZ() - cam.z;
+
+            if (outlines < MAX_OUTLINES) {
+                VertexRendering.drawOutline(
+                        matrices,
+                        lines,
+                        VoxelShapes.fullCube(),
+                        bx, by, bz,
+                        color,
+                        prioritizeArrows ? 3.0f : 2.0f
+                );
+                outlines++;
+            }
+
+            if (arrows < maxArrows) {
+                double tx = bx + 0.5;
+                double ty = by + 0.5;
+                double tz = bz + 0.5;
+                drawLine(matrices, lines, 0, 0, 0, tx, ty, tz, color);
+                drawArrowHead(matrices, lines, tx, ty, tz, color);
+                arrows++;
+            }
+
+            if (outlines >= MAX_OUTLINES && arrows >= maxArrows) {
+                break;
+            }
+        }
+    }
+
     private static void drawLine(
             MatrixStack matrices,
             VertexConsumer lines,
@@ -195,17 +214,12 @@ public final class SandEspClient implements ClientModInitializer {
                 .normal(entry, nx, ny, nz);
     }
 
-    /**
- * Ponta de seta 3D no destino (duas linhas em V + uma transversal).
- * Aponta na direcao que vem da camera (origem 0,0,0).
- */
     private static void drawArrowHead(
             MatrixStack matrices,
             VertexConsumer lines,
             double tx, double ty, double tz,
             int color
     ) {
-        // Direcao da camera ate o alvo
         double len = Math.sqrt(tx * tx + ty * ty + tz * tz);
         if (len < 0.001) {
             return;
@@ -215,17 +229,14 @@ public final class SandEspClient implements ClientModInitializer {
         double dy = ty / len;
         double dz = tz / len;
 
-        // Vetor perpendicular para abrir a ponta da seta
         double px;
         double py;
         double pz;
         if (Math.abs(dy) < 0.9) {
-            // cross com up (0,1,0)
             px = -dz;
             py = 0;
             pz = dx;
         } else {
-            // cross com right (1,0,0)
             px = 0;
             py = dz;
             pz = -dy;
@@ -239,22 +250,17 @@ public final class SandEspClient implements ClientModInitializer {
         py /= plen;
         pz /= plen;
 
-        // Base da ponta (um pouco antes do centro do bloco)
         double bx = tx - dx * ARROW_SIZE;
         double by = ty - dy * ARROW_SIZE;
         double bz = tz - dz * ARROW_SIZE;
-
         double spread = ARROW_SIZE * 0.55;
 
-        // Duas laterais da seta
         drawLine(matrices, lines,
                 bx + px * spread, by + py * spread, bz + pz * spread,
                 tx, ty, tz, color);
         drawLine(matrices, lines,
                 bx - px * spread, by - py * spread, bz - pz * spread,
                 tx, ty, tz, color);
-
-        // Base da seta
         drawLine(matrices, lines,
                 bx + px * spread, by + py * spread, bz + pz * spread,
                 bx - px * spread, by - py * spread, bz - pz * spread,
@@ -263,6 +269,7 @@ public final class SandEspClient implements ClientModInitializer {
 
     private static void refreshSandCache(MinecraftClient client) {
         SAND_BLOCKS.clear();
+        SUSPICIOUS_BLOCKS.clear();
 
         BlockPos center = client.player.getBlockPos();
         lastScanCenter = center.toImmutable();
@@ -297,7 +304,12 @@ public final class SandEspClient implements ClientModInitializer {
                         for (int ly = 0; ly < 16; ly++) {
                             for (int lz = 0; lz < 16; lz++) {
                                 BlockState state = section.getBlockState(lx, ly, lz);
-                                if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
+
+                                if (state.isOf(Blocks.SUSPICIOUS_SAND)
+                                        || state.isOf(Blocks.SUSPICIOUS_GRAVEL)) {
+                                    cursor.set(baseX + lx, baseY + ly, baseZ + lz);
+                                    SUSPICIOUS_BLOCKS.add(cursor.toImmutable());
+                                } else if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
                                     cursor.set(baseX + lx, baseY + ly, baseZ + lz);
                                     SAND_BLOCKS.add(cursor.toImmutable());
                                 }
