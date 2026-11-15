@@ -3,10 +3,10 @@
 Client-side Fabric mod for **Minecraft Java 1.21.11** + Resource Pack de Outline RGB.
 
 ## Mod (ESP)
-- Detecta areia normal e areia vermelha num raio de 12 blocos.
+- Detecta areia normal e areia vermelha em **todos os chunks carregados** (sem limite de distância).
 - Desenha um outline RGB animado em volta dos blocos detectados.
 - Pressione **K** para ligar/desligar o ESP.
-- Atualiza a lista de blocos a cada 10 ticks para melhor performance.
+- Atualiza a lista de blocos a cada 20 ticks para melhor performance.
 
 ## Resource Pack (Outline de Seleção)
 Na pasta `resourcepack/` está um Resource Pack completo que muda a **linha de seleção** (quando você mira num bloco) para RGB animado.
@@ -34,6 +34,6 @@ GitHub Actions faz build automático em todo push.
 Coloque o JAR na pasta `mods` junto com Fabric Loader + Fabric API para 1.21.11.
 
 ## Ainda não implementado
-- Renderização verdadeira através de paredes (ESP full)
+- Renderização verdadeira através de paredes (ESP full / no depth test)
 - Setas direcionais / labels de distância
 - Detecção de Suspicious Sand
