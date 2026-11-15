@@ -14,6 +14,7 @@ import net.minecraft.client.render.RenderLayers;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexRendering;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
@@ -22,20 +23,21 @@ import org.lwjgl.glfw.GLFW;
 /**
  * Client-side sand ESP for Minecraft 1.21.11 / Fabric.
  * Press K to toggle the outline.
- * Scans within the client's render distance (effectively no practical limit).
  */
 public final class SandEspClient implements ClientModInitializer {
-    private static final int REFRESH_INTERVAL_TICKS = 20;
+    // Raio grande (48 blocos = 96 de diâmetro). Sem limite prático no dia a dia.
+    private static final int SEARCH_RADIUS = 48;
+    private static final int REFRESH_INTERVAL_TICKS = 15;
     private static final List<BlockPos> SAND_BLOCKS = new ArrayList<>();
 
     private static boolean enabled = true;
-    private static int tickCounter = REFRESH_INTERVAL_TICKS - 1;
+    private static int tickCounter = 0;
     private static KeyBinding toggleKey;
 
     @Override
     public void onInitializeClient() {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.sand_rgb_esp.toggle",
+                "key.areia_esp.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_K,
                 KeyBinding.Category.MISC
@@ -44,16 +46,20 @@ public final class SandEspClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleKey.wasPressed()) {
                 enabled = !enabled;
+                if (client.player != null) {
+                    client.player.sendMessage(
+                            Text.literal(enabled ? "Areia ESP: ON" : "Areia ESP: OFF"),
+                            true
+                    );
+                }
                 if (!enabled) {
                     SAND_BLOCKS.clear();
                 } else {
-                    tickCounter = REFRESH_INTERVAL_TICKS - 1;
+                    tickCounter = REFRESH_INTERVAL_TICKS; // força scan imediato
                 }
             }
 
             if (!enabled || client.world == null || client.player == null) {
-                SAND_BLOCKS.clear();
-                tickCounter = REFRESH_INTERVAL_TICKS - 1;
                 return;
             }
 
@@ -64,9 +70,12 @@ public final class SandEspClient implements ClientModInitializer {
         });
 
         WorldRenderEvents.AFTER_ENTITIES.register(context -> {
+            if (!enabled || SAND_BLOCKS.isEmpty()) {
+                return;
+            }
+
             MinecraftClient client = MinecraftClient.getInstance();
-            if (!enabled || client.world == null || client.player == null
-                    || SAND_BLOCKS.isEmpty()
+            if (client.world == null || client.player == null
                     || context.matrices() == null || context.consumers() == null) {
                 return;
             }
@@ -88,7 +97,7 @@ public final class SandEspClient implements ClientModInitializer {
                             VoxelShapes.fullCube(),
                             x, y, z,
                             color,
-                            2.0f
+                            3.0f
                     );
                 }
             } finally {
@@ -100,27 +109,23 @@ public final class SandEspClient implements ClientModInitializer {
     private static void refreshSandCache(MinecraftClient client) {
         SAND_BLOCKS.clear();
 
-        // Usa a distância de renderização do cliente (sem limite prático fixo)
-        int renderDistanceChunks = client.options.getViewDistance().getValue();
-        int radius = renderDistanceChunks * 16;
-
         BlockPos center = client.player.getBlockPos();
         BlockPos.Mutable cursor = new BlockPos.Mutable();
 
-        int minY = client.world.getBottomY();
-        int maxY = client.world.getTopYInclusive();
+        int minY = Math.max(client.world.getBottomY(), center.getY() - SEARCH_RADIUS);
+        int maxY = Math.min(client.world.getTopYInclusive(), center.getY() + SEARCH_RADIUS);
 
-        for (int x = -radius; x <= radius; x++) {
-            for (int z = -radius; z <= radius; z++) {
-                // Só escaneia se o chunk estiver carregado
-                int chunkX = (center.getX() + x) >> 4;
-                int chunkZ = (center.getZ() + z) >> 4;
-                if (!client.world.getChunkManager().isChunkLoaded(chunkX, chunkZ)) {
+        for (int x = -SEARCH_RADIUS; x <= SEARCH_RADIUS; x++) {
+            for (int z = -SEARCH_RADIUS; z <= SEARCH_RADIUS; z++) {
+                int worldX = center.getX() + x;
+                int worldZ = center.getZ() + z;
+
+                if (!client.world.getChunkManager().isChunkLoaded(worldX >> 4, worldZ >> 4)) {
                     continue;
                 }
 
                 for (int y = minY; y <= maxY; y++) {
-                    cursor.set(center.getX() + x, y, center.getZ() + z);
+                    cursor.set(worldX, y, worldZ);
                     var state = client.world.getBlockState(cursor);
                     if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
                         SAND_BLOCKS.add(cursor.toImmutable());
@@ -131,7 +136,7 @@ public final class SandEspClient implements ClientModInitializer {
     }
 
     private static int animatedRgbColor() {
-        float hue = (System.currentTimeMillis() % 5000L) / 5000.0f;
+        float hue = (System.currentTimeMillis() % 4000L) / 4000.0f;
         float scaled = hue * 6.0f;
         int sector = (int) scaled;
         float fraction = scaled - sector;
@@ -153,6 +158,7 @@ public final class SandEspClient implements ClientModInitializer {
         int r = Math.round(red * 255.0f);
         int g = Math.round(green * 255.0f);
         int b = Math.round(blue * 255.0f);
+        // ARGB com alpha alto
         return 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 }
