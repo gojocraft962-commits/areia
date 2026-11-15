@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "sand_rgb_esp",
+  "version": "${version}",
+  "name": "Sand RGB ESP",
+  "description": "Client-side RGB outline ESP for sand and red sand blocks.",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["br.com.gojocraft.sandesp.SandEspClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
