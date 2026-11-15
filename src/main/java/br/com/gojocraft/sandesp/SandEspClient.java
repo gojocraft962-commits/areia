@@ -10,7 +10,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.RenderLayers;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexRendering;
 import net.minecraft.client.util.InputUtil;
@@ -71,9 +71,9 @@ public final class SandEspClient implements ClientModInitializer {
                 return;
             }
 
-            Vec3d cameraPos = client.gameRenderer.getCamera().getPos();
+            Vec3d cameraPos = client.gameRenderer.getCamera().getCameraPos();
             int color = animatedRgbColor();
-            VertexConsumer lines = context.consumers().getBuffer(RenderLayer.getLines());
+            VertexConsumer lines = context.consumers().getBuffer(RenderLayers.lines());
 
             context.matrices().push();
             try {
