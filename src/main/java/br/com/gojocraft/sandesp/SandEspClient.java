@@ -15,17 +15,19 @@ import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexRendering;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
+import net.minecraft.world.chunk.WorldChunk;
 import org.lwjgl.glfw.GLFW;
 
 /**
  * Client-side sand ESP for Minecraft 1.21.11 / Fabric.
  * Press K to toggle the outline.
+ * Scans all loaded chunks (no distance limit).
  */
 public final class SandEspClient implements ClientModInitializer {
-    private static final int SEARCH_RADIUS = 12;
-    private static final int REFRESH_INTERVAL_TICKS = 10;
+    private static final int REFRESH_INTERVAL_TICKS = 20;
     private static final List<BlockPos> SAND_BLOCKS = new ArrayList<>();
 
     private static boolean enabled = true;
@@ -99,16 +101,27 @@ public final class SandEspClient implements ClientModInitializer {
 
     private static void refreshSandCache(MinecraftClient client) {
         SAND_BLOCKS.clear();
-        BlockPos center = client.player.getBlockPos();
-        BlockPos.Mutable cursor = new BlockPos.Mutable();
 
-        for (int x = -SEARCH_RADIUS; x <= SEARCH_RADIUS; x++) {
-            for (int y = -SEARCH_RADIUS; y <= SEARCH_RADIUS; y++) {
-                for (int z = -SEARCH_RADIUS; z <= SEARCH_RADIUS; z++) {
-                    cursor.set(center.getX() + x, center.getY() + y, center.getZ() + z);
-                    var state = client.world.getBlockState(cursor);
-                    if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
-                        SAND_BLOCKS.add(cursor.toImmutable());
+        // Escaneia TODOS os chunks carregados (sem limite de distância)
+        for (WorldChunk chunk : client.world.getChunkManager().chunks.values()) {
+            if (chunk == null) continue;
+
+            ChunkPos chunkPos = chunk.getPos();
+            int startX = chunkPos.getStartX();
+            int startZ = chunkPos.getStartZ();
+            int bottomY = client.world.getBottomY();
+            int topY = client.world.getTopYInclusive();
+
+            BlockPos.Mutable cursor = new BlockPos.Mutable();
+
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int y = bottomY; y <= topY; y++) {
+                        cursor.set(startX + x, y, startZ + z);
+                        var state = chunk.getBlockState(cursor);
+                        if (state.isOf(Blocks.SAND) || state.isOf(Blocks.RED_SAND)) {
+                            SAND_BLOCKS.add(cursor.toImmutable());
+                        }
                     }
                 }
             }
