@@ -20,7 +20,6 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkSectionPos;
-import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
 import net.minecraft.world.chunk.ChunkSection;
@@ -28,33 +27,28 @@ import net.minecraft.world.chunk.WorldChunk;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * Client-side sand ESP — otimizado.
- * - Scan por secao, pula vazias
- * - Areia limitada em Y e quantidade
- * - Suspicious sempre priorizado
- * - Sem sort/alloc por frame
- * Press K to toggle.
+ * Client-side sand ESP — versao anti-crash.
+ * Outline RGB + Suspicious dourado. Press K to toggle.
  */
 public final class SandEspClient implements ClientModInitializer {
-    private static final int CHUNK_RADIUS = 2;              // 2 chunks ~= 32 blocos
-    private static final int REFRESH_INTERVAL_TICKS = 25;
-    private static final int MOVE_THRESHOLD = 10;
+    private static final int CHUNK_RADIUS = 2;
+    private static final int REFRESH_INTERVAL_TICKS = 30;
+    private static final int MOVE_THRESHOLD = 12;
+    private static final int JOIN_DELAY_TICKS = 40; // espera mundo estabilizar
 
-    private static final int MAX_SAND_STORED = 80;          // cap no cache
-    private static final int MAX_SAND_OUTLINES = 48;
-    private static final int MAX_SAND_ARROWS = 6;
-    private static final int MAX_SUS_OUTLINES = 64;
-    private static final int MAX_SUS_ARROWS = 24;
+    private static final int MAX_SAND_STORED = 60;
+    private static final int MAX_SAND_OUTLINES = 40;
+    private static final int MAX_SUS_OUTLINES = 48;
+    private static final int SAND_Y_RANGE = 20;
 
-    private static final int SAND_Y_RANGE = 24;             // so escaneia areia perto do Y do player
-    private static final float ARROW_SIZE = 0.45f;
     private static final int SUSPICIOUS_COLOR = 0xFFFFD700;
 
     private static final List<BlockPos> SAND_BLOCKS = new ArrayList<>(MAX_SAND_STORED);
-    private static final List<BlockPos> SUSPICIOUS_BLOCKS = new ArrayList<>(64);
+    private static final List<BlockPos> SUSPICIOUS_BLOCKS = new ArrayList<>(32);
 
     private static boolean enabled = true;
     private static int tickCounter = 0;
+    private static int joinTicks = 0;
     private static BlockPos lastScanCenter = null;
     private static KeyBinding toggleKey;
 
@@ -68,172 +62,123 @@ public final class SandEspClient implements ClientModInitializer {
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            while (toggleKey.wasPressed()) {
-                enabled = !enabled;
-
-                if (!enabled) {
+            try {
+                // Mundo saiu / desconectou
+                if (client.world == null || client.player == null) {
                     SAND_BLOCKS.clear();
                     SUSPICIOUS_BLOCKS.clear();
                     lastScanCenter = null;
-                    if (client.player != null) {
+                    joinTicks = 0;
+                    return;
+                }
+
+                // Aguarda um pouco apos entrar no mundo/servidor
+                if (joinTicks < JOIN_DELAY_TICKS) {
+                    joinTicks++;
+                    return;
+                }
+
+                while (toggleKey.wasPressed()) {
+                    enabled = !enabled;
+                    if (!enabled) {
+                        SAND_BLOCKS.clear();
+                        SUSPICIOUS_BLOCKS.clear();
+                        lastScanCenter = null;
                         client.player.sendMessage(Text.literal("Areia ESP: OFF"), true);
+                    } else {
+                        lastScanCenter = null;
+                        safeRefresh(client);
+                        client.player.sendMessage(
+                                Text.literal("Areia ESP: ON (areia " + SAND_BLOCKS.size()
+                                        + " | suspicious " + SUSPICIOUS_BLOCKS.size() + ")"),
+                                true
+                        );
                     }
-                } else if (client.world != null && client.player != null) {
-                    lastScanCenter = null;
-                    refreshCache(client);
-                    client.player.sendMessage(
-                            Text.literal("Areia ESP: ON (areia " + SAND_BLOCKS.size()
-                                    + " | suspicious " + SUSPICIOUS_BLOCKS.size() + ")"),
-                            true
-                    );
                 }
-            }
 
-            if (!enabled || client.world == null || client.player == null) {
-                return;
-            }
-
-            if (++tickCounter >= REFRESH_INTERVAL_TICKS) {
-                tickCounter = 0;
-                BlockPos center = client.player.getBlockPos();
-                if (lastScanCenter == null
-                        || lastScanCenter.getManhattanDistance(center) >= MOVE_THRESHOLD) {
-                    refreshCache(client);
+                if (!enabled) {
+                    return;
                 }
+
+                if (++tickCounter >= REFRESH_INTERVAL_TICKS) {
+                    tickCounter = 0;
+                    BlockPos center = client.player.getBlockPos();
+                    if (lastScanCenter == null
+                            || lastScanCenter.getManhattanDistance(center) >= MOVE_THRESHOLD) {
+                        safeRefresh(client);
+                    }
+                }
+            } catch (Throwable t) {
+                // Nunca derruba o cliente por causa do ESP
+                SAND_BLOCKS.clear();
+                SUSPICIOUS_BLOCKS.clear();
             }
         });
 
         WorldRenderEvents.AFTER_ENTITIES.register(context -> {
-            if (!enabled) return;
-            if (SAND_BLOCKS.isEmpty() && SUSPICIOUS_BLOCKS.isEmpty()) return;
-            if (context.matrices() == null || context.consumers() == null) return;
-
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null || client.player == null) return;
-
-            Vec3d cam = client.gameRenderer.getCamera().getCameraPos();
-            int rgb = animatedRgbColor();
-            VertexConsumer lines = context.consumers().getBuffer(RenderLayers.lines());
-            MatrixStack matrices = context.matrices();
-
-            matrices.push();
             try {
-                // Suspicious (poucos, prioritarios) — sem sort extra
-                drawList(matrices, lines, cam, SUSPICIOUS_BLOCKS,
-                        SUSPICIOUS_COLOR, MAX_SUS_OUTLINES, MAX_SUS_ARROWS, 3.0f);
+                if (!enabled) return;
+                if (SAND_BLOCKS.isEmpty() && SUSPICIOUS_BLOCKS.isEmpty()) return;
+                if (context.matrices() == null || context.consumers() == null) return;
 
-                // Areia normal — limites baixos
-                drawList(matrices, lines, cam, SAND_BLOCKS,
-                        rgb, MAX_SAND_OUTLINES, MAX_SAND_ARROWS, 2.0f);
-            } finally {
-                matrices.pop();
+                MinecraftClient client = MinecraftClient.getInstance();
+                if (client.world == null || client.player == null) return;
+                if (joinTicks < JOIN_DELAY_TICKS) return;
+
+                Vec3d cam = client.gameRenderer.getCamera().getCameraPos();
+                int rgb = animatedRgbColor();
+                VertexConsumer lines = context.consumers().getBuffer(RenderLayers.lines());
+                MatrixStack matrices = context.matrices();
+
+                matrices.push();
+                try {
+                    drawOutlines(matrices, lines, cam, SUSPICIOUS_BLOCKS, SUSPICIOUS_COLOR, MAX_SUS_OUTLINES, 3.0f);
+                    drawOutlines(matrices, lines, cam, SAND_BLOCKS, rgb, MAX_SAND_OUTLINES, 2.0f);
+                } finally {
+                    matrices.pop();
+                }
+            } catch (Throwable t) {
+                // ignora erro de render
             }
         });
     }
 
-    /** Desenha ate maxOutlines / maxArrows — lista ja vem ordenada do scan. */
-    private static void drawList(
+    private static void drawOutlines(
             MatrixStack matrices,
             VertexConsumer lines,
             Vec3d cam,
             List<BlockPos> blocks,
             int color,
-            int maxOutlines,
-            int maxArrows,
-            float lineWidth
+            int max,
+            float width
     ) {
-        int n = blocks.size();
-        if (n == 0) return;
-
-        int outlines = 0;
-        int arrows = 0;
-        int limit = Math.min(n, Math.max(maxOutlines, maxArrows));
-
-        for (int i = 0; i < limit; i++) {
+        int n = Math.min(blocks.size(), max);
+        for (int i = 0; i < n; i++) {
             BlockPos pos = blocks.get(i);
-            double bx = pos.getX() - cam.x;
-            double by = pos.getY() - cam.y;
-            double bz = pos.getZ() - cam.z;
-
-            if (outlines < maxOutlines) {
-                VertexRendering.drawOutline(
-                        matrices, lines, VoxelShapes.fullCube(),
-                        bx, by, bz, color, lineWidth
-                );
-                outlines++;
-            }
-
-            if (arrows < maxArrows) {
-                double tx = bx + 0.5;
-                double ty = by + 0.5;
-                double tz = bz + 0.5;
-                drawLine(matrices, lines, 0, 0, 0, tx, ty, tz, color);
-                drawArrowHead(matrices, lines, tx, ty, tz, color);
-                arrows++;
-            }
+            double x = pos.getX() - cam.x;
+            double y = pos.getY() - cam.y;
+            double z = pos.getZ() - cam.z;
+            VertexRendering.drawOutline(
+                    matrices, lines, VoxelShapes.fullCube(),
+                    x, y, z, color, width
+            );
         }
     }
 
-    private static void drawLine(
-            MatrixStack matrices, VertexConsumer lines,
-            double x1, double y1, double z1,
-            double x2, double y2, double z2,
-            int color
-    ) {
-        MatrixStack.Entry entry = matrices.peek();
-
-        float r = ((color >> 16) & 0xFF) / 255.0f;
-        float g = ((color >> 8) & 0xFF) / 255.0f;
-        float b = (color & 0xFF) / 255.0f;
-        float a = ((color >> 24) & 0xFF) / 255.0f;
-
-        float dx = (float) (x2 - x1);
-        float dy = (float) (y2 - y1);
-        float dz = (float) (z2 - z1);
-        float len = MathHelper.sqrt(dx * dx + dy * dy + dz * dz);
-        if (len < 1.0e-5f) return;
-
-        float nx = dx / len;
-        float ny = dy / len;
-        float nz = dz / len;
-
-        lines.vertex(entry, (float) x1, (float) y1, (float) z1).color(r, g, b, a).normal(entry, nx, ny, nz);
-        lines.vertex(entry, (float) x2, (float) y2, (float) z2).color(r, g, b, a).normal(entry, nx, ny, nz);
-    }
-
-    private static void drawArrowHead(
-            MatrixStack matrices, VertexConsumer lines,
-            double tx, double ty, double tz, int color
-    ) {
-        double len = Math.sqrt(tx * tx + ty * ty + tz * tz);
-        if (len < 0.001) return;
-
-        double dx = tx / len;
-        double dy = ty / len;
-        double dz = tz / len;
-
-        double px, py, pz;
-        if (Math.abs(dy) < 0.9) {
-            px = -dz; py = 0; pz = dx;
-        } else {
-            px = 0; py = dz; pz = -dy;
+    private static void safeRefresh(MinecraftClient client) {
+        try {
+            refreshCache(client);
+        } catch (Throwable t) {
+            SAND_BLOCKS.clear();
+            SUSPICIOUS_BLOCKS.clear();
         }
-
-        double plen = Math.sqrt(px * px + py * py + pz * pz);
-        if (plen < 1.0e-5) return;
-        px /= plen; py /= plen; pz /= plen;
-
-        double bx = tx - dx * ARROW_SIZE;
-        double by = ty - dy * ARROW_SIZE;
-        double bz = tz - dz * ARROW_SIZE;
-        double s = ARROW_SIZE * 0.55;
-
-        drawLine(matrices, lines, bx + px * s, by + py * s, bz + pz * s, tx, ty, tz, color);
-        drawLine(matrices, lines, bx - px * s, by - py * s, bz - pz * s, tx, ty, tz, color);
-        drawLine(matrices, lines, bx + px * s, by + py * s, bz + pz * s, bx - px * s, by - py * s, bz - pz * s, color);
     }
 
     private static void refreshCache(MinecraftClient client) {
+        if (client.world == null || client.player == null) {
+            return;
+        }
+
         SAND_BLOCKS.clear();
         SUSPICIOUS_BLOCKS.clear();
 
@@ -252,10 +197,20 @@ public final class SandEspClient implements ClientModInitializer {
 
         for (int cx = playerChunkX - CHUNK_RADIUS; cx <= playerChunkX + CHUNK_RADIUS; cx++) {
             for (int cz = playerChunkZ - CHUNK_RADIUS; cz <= playerChunkZ + CHUNK_RADIUS; cz++) {
-                if (!client.world.getChunkManager().isChunkLoaded(cx, cz)) continue;
+                if (!client.world.getChunkManager().isChunkLoaded(cx, cz)) {
+                    continue;
+                }
 
-                WorldChunk chunk = client.world.getChunk(cx, cz);
+                WorldChunk chunk;
+                try {
+                    chunk = client.world.getChunk(cx, cz);
+                } catch (Throwable t) {
+                    continue;
+                }
+                if (chunk == null) continue;
+
                 ChunkSection[] sections = chunk.getSectionArray();
+                if (sections == null) continue;
 
                 for (int si = 0; si < sections.length; si++) {
                     ChunkSection section = sections[si];
@@ -263,15 +218,8 @@ public final class SandEspClient implements ClientModInitializer {
 
                     int baseY = ChunkSectionPos.getBlockCoord(bottomSection + si);
                     int sectionMaxY = baseY + 15;
-
-                    // Secao fora do range de areia E sem chance de suspicious no Y?
-                    // Suspicious e raro: ainda escaneamos secoes fora do range so para suspicious
                     boolean inSandY = sectionMaxY >= minSandY && baseY <= maxSandY;
                     boolean sandFull = SAND_BLOCKS.size() >= MAX_SAND_STORED;
-
-                    if (!inSandY && sandFull) {
-                        // Ainda procura suspicious em qualquer Y
-                    }
 
                     int baseX = cx << 4;
                     int baseZ = cz << 4;
@@ -301,9 +249,12 @@ public final class SandEspClient implements ClientModInitializer {
             }
         }
 
-        // Ordena 1x no scan (nao no render) — mais perto primeiro
         Comparator<BlockPos> byDist = Comparator.comparingDouble(
-                p -> p.getSquaredDistance(center.getX() + 0.5, center.getY() + 0.5, center.getZ() + 0.5)
+                p -> p.getSquaredDistance(
+                        center.getX() + 0.5,
+                        center.getY() + 0.5,
+                        center.getZ() + 0.5
+                )
         );
         SAND_BLOCKS.sort(byDist);
         SUSPICIOUS_BLOCKS.sort(byDist);
