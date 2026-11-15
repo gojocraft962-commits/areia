@@ -1,4 +1,4 @@
-name: Build Sand RGB ESP
+name: Build Areia ESP
 on:
   push:
     branches: [ main ]
@@ -23,5 +23,5 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: Sand-RGB-ESP-1.21.11
+          name: Areia-ESP-1.21.11
           path: build/libs/*.jar
